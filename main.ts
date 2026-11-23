@@ -36,6 +36,8 @@ const BPS = 10_000n;
 
 /** Highest close seen while long (the peak the trailing stop hangs from). */
 let peak: bigint | null = null;
+/** Whether the previous close already sat below the trailing-stop level. */
+let stopPending = false;
 
 await runBars({
   onBatch(state: BarsState, batch) {
@@ -51,8 +53,17 @@ await runBars({
       if (peak === null || close > peak) peak = close;
       // close < peak * (1 - TRAIL_BPS/10000)  <=>  close * 10000 < peak * (10000 - TRAIL_BPS)
       if (close * BPS < peak * (BPS - TRAIL_BPS)) {
-        orders.push({ side: 'sell', symbol: SYMBOL, qty: held.qty, max_slippage_bps: MAX_SLIPPAGE_BPS });
-        // peak is kept as the high-water mark for the re-entry test.
+        // Require two consecutive closes below the stop level, so a single
+        // noisy 1-minute print cannot stop the position out on its own.
+        if (stopPending) {
+          orders.push({ side: 'sell', symbol: SYMBOL, qty: held.qty, max_slippage_bps: MAX_SLIPPAGE_BPS });
+          // peak is kept as the high-water mark for the re-entry test.
+          stopPending = false;
+        } else {
+          stopPending = true;
+        }
+      } else {
+        stopPending = false;
       }
     } else {
       // Flat: enter on the first bar, or on a new high above the previous peak.
